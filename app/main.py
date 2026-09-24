@@ -2,6 +2,7 @@
 
 POST /api/traces                      提交光线与界面序列，返回追迹结果并保存
 GET  /api/traces                      列出所有已保存的追迹（摘要）
+POST /api/traces/compare              比较两条已保存追迹的状态与各分段差异
 GET  /api/traces/{trace_id}           按编号查询完整追迹（含各段交点与方向）
 GET  /api/traces/{trace_id}/segments/{seg_index}  按编号查询某一段
 POST /api/beam-evaluations            以中心方向为轴对称采样多条光线，返回每条光线
@@ -24,6 +25,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
 from . import db
+from .comparison import compare_trace_records
 from .geometry import (
     aim_solutions,
     alignment_sensitivities,
@@ -47,6 +49,8 @@ from .schemas import (
     PowerRequest,
     SegmentOut,
     SensitivityRequest,
+    TraceCompareRequest,
+    TraceCompareOut,
     TraceOut,
     TraceRequest,
     TraceSummary,
@@ -95,6 +99,31 @@ def create_trace(req: TraceRequest) -> dict:
 @app.get("/api/traces", response_model=list[TraceSummary])
 def list_traces() -> list[dict]:
     return db.list_traces()
+
+
+@app.post("/api/traces/compare", response_model=TraceCompareOut)
+def compare_traces(req: TraceCompareRequest) -> dict:
+    """按 seg_index 对齐比较两条已保存追迹的状态与分段。
+
+    状态（status）做精确比较；分段按 seg_index 取并集对齐，缺段单独报告。
+    同一分段内坐标（origin / hit_point）与折射率（n_medium / n_after）按
+    position_tolerance 判定，方向分量按 direction_tolerance 判定，均为统一
+    浮点绝对容差；事件（event）做精确比较。任一 trace_id 不存在返回 404，
+    容差为负或非有限数返回 422。只读比较，不修改任何已保存记录。
+    """
+    left = db.get_trace(req.left_trace_id)
+    if left is None:
+        raise HTTPException(
+            status_code=404, detail=f"追迹 {req.left_trace_id} 不存在"
+        )
+    right = db.get_trace(req.right_trace_id)
+    if right is None:
+        raise HTTPException(
+            status_code=404, detail=f"追迹 {req.right_trace_id} 不存在"
+        )
+    return compare_trace_records(
+        left, right, req.position_tolerance, req.direction_tolerance
+    )
 
 
 @app.get("/api/traces/{trace_id}", response_model=TraceOut)

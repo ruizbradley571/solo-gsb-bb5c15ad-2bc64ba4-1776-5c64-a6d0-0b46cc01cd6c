@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -72,6 +73,58 @@ class TraceSummary(BaseModel):
     reason: str | None
     n_start: float
     created_at: str
+
+
+class TraceCompareRequest(BaseModel):
+    """追迹结果对比请求：两个已保存追迹编号与非负位置/方向容差。"""
+
+    left_trace_id: int = Field(gt=0, description="左侧已保存追迹编号")
+    right_trace_id: int = Field(gt=0, description="右侧已保存追迹编号")
+    position_tolerance: float = Field(
+        ge=0, description="位置/折射率非负绝对容差，用于坐标与 n_medium/n_after"
+    )
+    direction_tolerance: float = Field(
+        ge=0, description="方向非负绝对容差，用于方向分量"
+    )
+
+    @field_validator("position_tolerance", "direction_tolerance")
+    @classmethod
+    def tolerance_finite(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("容差必须为有限的非负数")
+        return v
+
+
+class FieldDifferenceOut(BaseModel):
+    """单个字段差异；seg_index 为 None 表示追迹级字段（status）。
+
+    缺段时 field 为 "segment"、缺段一侧值为整个分段或 null；字符串字段或
+    null 不一致时 abs_error 为 null。
+    """
+
+    seg_index: int | None
+    field: str
+    left_value: Any
+    right_value: Any
+    abs_error: float | None
+
+
+class StatusDiffOut(BaseModel):
+    left: str
+    right: str
+
+
+class TraceCompareOut(BaseModel):
+    left_trace_id: int
+    right_trace_id: int
+    position_tolerance: float
+    direction_tolerance: float
+    equivalent: bool
+    status_match: bool
+    status_diff: StatusDiffOut | None
+    first_difference: FieldDifferenceOut | None
+    segment_differences: list[FieldDifferenceOut]
+
 
 
 class ObservationLineIn(BaseModel):

@@ -29,6 +29,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | GET | `/api/traces` | 列出所有已保存追迹的摘要 |
 | GET | `/api/traces/{trace_id}` | 按编号查询完整追迹（含各段交点与方向） |
 | GET | `/api/traces/{trace_id}/segments/{seg_index}` | 按编号查询某一段的交点与方向 |
+| POST | `/api/traces/compare` | 按 seg_index 对齐比较两条已保存追迹的状态与分段，返回等价性与全部字段差异（只读，不入库） |
 | POST | `/api/beam-evaluations` | 扇形采样多条光线逐条追迹，返回各光线发射角、状态、观察线交点及质心/RMS（不入库） |
 | POST | `/api/power-evaluations` | 复用光束采样与追迹，按菲涅耳公式逐界面累乘 s/p 透过率，返回各光线功率与功率加权质心（不入库） |
 | POST | `/api/aim-solutions` | 扫描发射角并对偏差异号区间二分，求解命中观察线目标偏移量的光线（不入库） |
@@ -72,6 +73,68 @@ curl -X POST http://localhost:8000/api/traces \
   }'
 # status = "total_internal_reflection"，reason 说明入射角超过临界角
 ```
+
+## 追迹结果对比
+
+`POST /api/traces/compare` 接收两个已保存追迹编号与非负的位置/方向容差，按 `seg_index` 对齐两条追迹的状态与分段并返回差异。该接口为**只读比较**，不修改任何已保存记录。
+
+- **状态比较**：`status` 做精确（字符串）比较；不一致时 `status_match` 为 `false` 且 `status_diff` 给出左右状态，一致时 `status_diff` 为 `null`。
+- **分段对齐**：按 `seg_index` 取两侧分段序号并集；仅一侧存在的分段按**缺段**报告（`field` 为 `"segment"`，存在一侧回填该分段内容、缺失一侧为 `null`，`abs_error` 为 `null`）。
+- **字段比较**：同一分段内，坐标（`origin` / `hit_point`）与折射率（`n_medium` / `n_after`）按**位置容差**、方向分量（`direction`）按**方向容差**判定，均为统一浮点**绝对容差**（`|左值 − 右值| ≤ 容差` 视为相等，容差为 0 即精确相等）；`event` 做精确比较。可空字段仅一侧为 `null` 时报告差异（`abs_error` 为 `null`）。
+- **返回**：`equivalent`（状态一致且无任何分段差异）、`first_difference`（首个字段差异：状态差异优先，否则按 `seg_index` 升序、字段顺序的首个分段差异；无差异为 `null`）、`segment_differences`（全部分段差异）。
+- **错误**：任一 `trace_id` 不存在返回 `404`；容差为负或非有限数返回 `422`。
+
+### 追迹对比请求示例
+
+```bash
+curl -X POST http://localhost:8000/api/traces/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "left_trace_id": 1,
+    "right_trace_id": 2,
+    "position_tolerance": 1e-6,
+    "direction_tolerance": 1e-6
+  }'
+```
+
+### 追迹对比响应说明
+
+```json
+{
+  "left_trace_id": 1,
+  "right_trace_id": 2,
+  "position_tolerance": 1e-06,
+  "direction_tolerance": 1e-06,
+  "equivalent": false,
+  "status_match": true,
+  "status_diff": null,
+  "first_difference": {
+    "seg_index": 1,
+    "field": "direction.y",
+    "left_value": 0.4472135955,
+    "right_value": 0.4473135955,
+    "abs_error": 0.0001
+  },
+  "segment_differences": [
+    {
+      "seg_index": 1,
+      "field": "direction.y",
+      "left_value": 0.4472135955,
+      "right_value": 0.4473135955,
+      "abs_error": 0.0001
+    },
+    {
+      "seg_index": 3,
+      "field": "segment",
+      "left_value": {"seg_index": 3, "origin": {"x": 4.0, "y": 1.0}, "direction": {"x": 1.0, "y": 0.0}, "n_medium": 1.0, "hit_point": null, "event": null, "n_after": null},
+      "right_value": null,
+      "abs_error": null
+    }
+  ]
+}
+```
+
+- `segment_differences[]` 每项含 `seg_index`（状态差异条目为 `null`，仅出现于 `first_difference`）、`field`（如 `origin.x` / `direction.y` / `n_medium` / `hit_point.x` / `event` / `n_after` / `segment`）、`left_value` / `right_value`（左右两侧取值，缺段或字段缺失一侧为 `null`）、`abs_error`（数值字段的绝对误差；字符串字段、缺段或 null 不一致时为 `null`）。
 
 ## 光束评估
 
@@ -411,6 +474,7 @@ curl -X POST http://localhost:8000/api/focus-searches \
 app/
   main.py       FastAPI 路由与生命周期（启动时建库）
   geometry.py   二维求交、斯涅尔折射、方向采样、光斑质心/RMS、菲涅耳 s/p 透过率与功率加权质心、瞄准求解（扫描+二分）、装调灵敏度（逐界面法线 ±扰动与中心差分）、焦点搜索（观察线沿法线平移扫描 + 低谷黄金分割细化）
+  comparison.py 两条已保存追迹的状态与分段对齐比较（统一浮点容差、缺段报告）
   db.py         SQLite 持久化（traces / segments 两表）
   schemas.py    Pydantic 请求 / 响应模型
 Dockerfile
