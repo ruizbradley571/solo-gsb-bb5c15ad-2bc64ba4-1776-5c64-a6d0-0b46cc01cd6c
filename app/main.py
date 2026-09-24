@@ -4,6 +4,10 @@ POST /api/traces                      提交光线与界面序列，返回追迹
 GET  /api/traces                      列出所有已保存的追迹（摘要）
 GET  /api/traces/{trace_id}           按编号查询完整追迹（含各段交点与方向）
 GET  /api/traces/{trace_id}/segments/{seg_index}  按编号查询某一段
+POST /api/traces/compare              给定两个已保存 trace_id 与位置/方向容差，
+                                      按 seg_index 对齐比较状态与全部分段，返回
+                                      是否等价、状态差异、首个字段差异及分段差异
+                                      （只读，不修改原记录）
 POST /api/beam-evaluations            以中心方向为轴对称采样多条光线，返回每条光线
                                       的发射角、追迹状态、观察线交点及质心/RMS 半径
 POST /api/power-evaluations           复用光束采样与追迹，按菲涅耳公式逐界面累乘
@@ -24,6 +28,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
 from . import db
+from .comparison import compare_traces
 from .geometry import (
     aim_solutions,
     alignment_sensitivities,
@@ -47,6 +52,8 @@ from .schemas import (
     PowerRequest,
     SegmentOut,
     SensitivityRequest,
+    TraceCompareOut,
+    TraceCompareRequest,
     TraceOut,
     TraceRequest,
     TraceSummary,
@@ -113,6 +120,31 @@ def get_segment(trace_id: int, seg_index: int) -> dict:
             status_code=404, detail=f"追迹 {trace_id} 的第 {seg_index} 段不存在"
         )
     return segment
+
+
+@app.post("/api/traces/compare", response_model=TraceCompareOut)
+def compare_traces_endpoint(req: TraceCompareRequest) -> dict:
+    """比较两条已保存追迹：按 seg_index 对齐状态与分段，统一浮点绝对误差容差。
+
+    位置容差用于 origin/hit_point 坐标与 n_medium/n_after 等标量，方向容差用于
+    direction 分量；status/reason/event 为精确比较。返回是否等价、状态差异、
+    首个差异字段（先跟踪级 status/reason，再段索引与段内字段顺序）及全部
+    分段差异（含缺段）。任一 trace_id 不存在返回 404，容差为负返回 422；
+    该接口为只读比较，不修改任何已保存记录。
+    """
+    left = db.get_trace(req.left_trace_id)
+    if left is None:
+        raise HTTPException(
+            status_code=404, detail=f"追迹 {req.left_trace_id} 不存在"
+        )
+    right = db.get_trace(req.right_trace_id)
+    if right is None:
+        raise HTTPException(
+            status_code=404, detail=f"追迹 {req.right_trace_id} 不存在"
+        )
+    return compare_traces(
+        left, right, req.position_tolerance, req.direction_tolerance
+    )
 
 
 @app.post("/api/beam-evaluations", response_model=BeamEvaluationOut)

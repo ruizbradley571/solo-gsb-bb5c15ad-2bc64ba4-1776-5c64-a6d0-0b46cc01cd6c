@@ -74,6 +74,57 @@ class TraceSummary(BaseModel):
     created_at: str
 
 
+class TraceCompareRequest(BaseModel):
+    """追迹对比请求：两条已保存追迹的编号与非负位置/方向容差。
+
+    位置容差用于坐标（origin、hit_point）与折射率等标量字段的绝对误差比较；
+    方向容差用于 direction 分量；二者均为非负，传 0 表示要求完全一致。
+    """
+
+    left_trace_id: int
+    right_trace_id: int
+    position_tolerance: float = Field(ge=0, default=0.0, description="位置/标量字段非负绝对误差容差")
+    direction_tolerance: float = Field(ge=0, default=0.0, description="方向分量非负绝对误差容差")
+
+
+class TraceFieldDifferenceOut(BaseModel):
+    """一个字段差异：所属段（跟踪级字段为 null）、字段名、左右值与绝对误差。
+
+    段内浮点字段超差时给出 abs_error；字符串字段或可空字段恰有一侧为 null
+    时 abs_error 为 null。
+    """
+
+    seg_index: int | None
+    field: str | None
+    left_value: float | str | None
+    right_value: float | str | None
+    abs_error: float | None
+    missing_side: str | None = None
+
+
+class TraceStatusDifferenceOut(BaseModel):
+    """两条追迹的状态对比：status / reason 是否分别相同及各自取值。"""
+
+    equal: bool
+    status_equal: bool
+    reason_equal: bool
+    left_status: str
+    right_status: str
+    left_reason: str | None
+    right_reason: str | None
+
+
+class TraceCompareOut(BaseModel):
+    left_trace_id: int
+    right_trace_id: int
+    position_tolerance: float
+    direction_tolerance: float
+    equivalent: bool
+    status_difference: TraceStatusDifferenceOut
+    first_difference: TraceFieldDifferenceOut | None
+    segment_differences: list[TraceFieldDifferenceOut]
+
+
 class ObservationLineIn(BaseModel):
     """观察线：线上一点与法线（法线方向不影响直线位置，仅用于求交方程）。"""
 
